@@ -25,6 +25,7 @@ from .text import send_verification_code, verify_number
 import traceback
 from django.contrib.auth import authenticate
 from rest_framework.authtoken.models import Token
+from twilio.base.exceptions import TwilioRestException
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -33,6 +34,10 @@ def signup(request):
     email = data.get('email')
     password = data.get('password')
     confirmationToken = secrets.token_hex(20)
+
+        # Check if the email already exists
+    if User.objects.filter(email=email).exists():
+        return JsonResponse({'error': 'User already exists'}, status=400)
 
     # Create a new User instance. Django hashes the password internally here
     user = User.objects.create_user(username=email, email=email, password=password)
@@ -103,7 +108,12 @@ def add_info(request):
 
            # Send verification SMS
         if phone_number:
-            send_verification_code(phone_number)  # Send SMS using Twilio
+            try:
+
+                send_verification_code(phone_number)
+            except TwilioRestException:
+                # Handle Twilio exception for invalid phone number
+                return JsonResponse({'error': 'Invalid phone number'}, status=400)
 
         return JsonResponse({'message': 'User profile updated successfully and SMS sent.'})
 
@@ -259,20 +269,58 @@ def login(request):
         if user is not None:
             # User is authenticated, proceed to generate and return the token
             token, created = Token.objects.get_or_create(user=user)
+
+            # Try to fetch the associated UserProfile
+            try:
+                user_profile = UserProfile.objects.get(user=user)
+            except UserProfile.DoesNotExist:
+                user_profile = None
+
+            # Prepare user data for the response
+            user_data = {
+                'email': user.email,
+                'first_name': user.first_name,
+                'last_name': user.last_name
+            }
+
+            # Include additional fields from UserProfile if it exists
+            if user_profile:
+                user_data.update({
+                    'organization': user_profile.organization,
+                    'phone_verified': user_profile.phone_verified,
+                    'email_verified': user_profile.email_verified,
+                    # Add other fields from UserProfile as needed
+                })
+
             return JsonResponse({
                 'message': 'Login successful',
                 'token': token.key,
-                'user': {
-                    'email': user.email,
-                    'first_name': user.first_name,
-                    'last_name': user.last_name
-                    # Add other user fields you need
-                }
+                'user': user_data
             })
+
         else:
             # Authentication failed
             return JsonResponse({'error': 'Invalid credentials'}, status=401)
 
     except Exception as e:
         # Handle unexpected errors
+        return JsonResponse({'error': str(e)}, status=500)
+    
+@csrf_exempt
+@require_http_methods(["POST"])
+def login_without_password(request):
+    try:
+        data = json.loads(request.body)
+        email = data.get('email')
+
+        user = authenticate(email=email)
+        if user:
+            token, created = Token.objects.get_or_create(user=user)
+            return JsonResponse({
+                'message': 'Login successful',
+                'token': token.key
+            })
+        else:
+            return JsonResponse({'error': 'Authentication failed'}, status=401)
+    except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)

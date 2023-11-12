@@ -156,3 +156,8 @@ CORS_ALLOW_HEADERS = [
 ]
 
 APPEND_SLASH=False
+
+AUTHENTICATION_BACKENDS = [
+    'myapp.backends.EmailPhoneAuthenticationBackend',  # Your custom backend
+    'django.contrib.auth.backends.ModelBackend',  # Default ModelBackend
+]

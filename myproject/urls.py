@@ -15,7 +15,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from myapp.views import add_info, confirm_phone_number, signup, confirm_email, resend_email, resend_code
+from myapp.views import add_info, confirm_phone_number, signup, confirm_email, resend_email, resend_code, login_without_password, login
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -25,4 +25,7 @@ urlpatterns = [
     path('resend-email/', resend_email, name='resend_email'), 
     path('resend-code/', resend_code, name='resend_code'),
     path('confirm-phone-number/', confirm_phone_number,name='confirm_phone_number'),
+    path('login/', login,name='login'),
+    path('login-without-password/', login_without_password,name='login_without_password'),
+
 ]
