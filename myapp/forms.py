@@ -12,7 +12,7 @@ class UserRegisterForm(UserCreationForm):
     
     class Meta:
         model = User
-        fields = ['username', 'email', 'password1', 'password2', 'first_name', 'last_name']
+        fields = [ 'email', 'password', 'first_name', 'last_name']
 
 # You will use this form to update the UserProfile after creating the User.
 class UserProfileForm(forms.ModelForm):

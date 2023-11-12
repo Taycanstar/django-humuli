@@ -15,9 +15,14 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from myapp.views import verify_email
+from myapp.views import add_info, confirm_phone_number, signup, confirm_email, resend_email, resend_code
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('verify-email/', verify_email, name='verify-email'), 
+    path('signup/', signup, name='signup'), 
+    path('add-info/', add_info, name='add_info'), 
+    path('confirm-email/', confirm_email, name='confirm_email'), 
+    path('resend-email/', resend_email, name='resend_email'), 
+    path('resend-code/', resend_code, name='resend_code'),
+    path('confirm-phone-number/', confirm_phone_number,name='confirm_phone_number'),
 ]

@@ -19,82 +19,45 @@ from decouple import config
 from .models import Confirmation
 from django.contrib.auth.hashers import make_password
 import secrets
+from django.core.exceptions import ObjectDoesNotExist
+from datetime import datetime
+from .text import send_verification_code, verify_number
+import traceback
+from django.contrib.auth import authenticate
+from rest_framework.authtoken.models import Token
 
-
-
-
+@csrf_exempt
+@require_http_methods(["POST"])
 def signup(request):
-    if request.method == 'POST':
-        form = UserRegisterForm(request.POST)
-    if form.is_valid():
-            user = form.save(commit=False)
-            user.is_active = False  # User is not active until they confirm their email.
-            user.save()
-            
-            # Create a UserProfile instance for the new user
-            profile = UserProfile(
-                user=user,
-                first_name=form.cleaned_data.get('first_name'),
-                last_name=form.cleaned_data.get('last_name'),
-                birthday=form.cleaned_data.get('birthday'),
-                phone_number=form.cleaned_data.get('phone_number'),
-                subscription="standard"
-                # Fill in the additional fields from the form
-            )
-            profile.save()
-
-            # Generate a one-time use token to verify the user's email address
-            verification_token = secrets.token_hex(20)
-            # Save the token with the user or profile for later verification
-
-            # Send an email to the user with the token in a link they can click to verify
-            verify_url = request.build_absolute_uri(
-                reverse('your_verify_email_view', args=[verification_token])
-            )
-            send_mail(
-                'Verify your account',
-                f'Please click the following link to verify your account: {verify_url}',
-                settings.DEFAULT_FROM_EMAIL,
-                [user.email],
-                fail_silently=False,
-            )
-            
-            # Redirect to a 'check your email' page or inform the user to check their email
-            return redirect('check_your_email_page')
-    else:
-        form = UserRegisterForm()
-    return render(request, 'register.html', {'form': form})
-
-
-@csrf_exempt  # Use this decorator to exempt the view from CSRF verification.
-@require_http_methods(["POST"])  # This view will only accept POST requests.
-def verify_email(request):
     data = json.loads(request.body)
     email = data.get('email')
     password = data.get('password')
     confirmationToken = secrets.token_hex(20)
 
-    # Hash the password
-    hashed_password = make_password(password)
+    # Create a new User instance. Django hashes the password internally here
+    user = User.objects.create_user(username=email, email=email, password=password)
 
-    # Create a confirmation instance
+    # Create a UserProfile instance with email_verified set to False
+    user_profile = UserProfile(
+        user=user,
+        email=email,
+        email_verified=False,
+        phone_verified=False,
+    )
+    user_profile.save()
+
+    # Create a confirmation instance for email verification
     confirmation = Confirmation(
         email=email,
-        hashed_password=hashed_password,
         confirmation_token=confirmationToken,
     )
-
-    # Save the confirmation instance
     confirmation.save()
 
     # Prepare and send the verification email
     subject = "Verify Your Email"
     frontend_url = config('FRONTEND_URL')
-    message = (
-        f"To continue setting up your Humuli account, please click the following link "
-        f"to confirm your email: {frontend_url}/onboarding/details?"
-        f"token={confirmationToken}&email={email}"
-    )
+    message = f"To continue setting up your Humuli account, please click the following link to confirm your email: {frontend_url}/onboarding/info?token={confirmationToken}&email={email}"
+    
     sender = config('EMAIL_SENDER')
     token = config('ONBOARDING_EMAIL_SERVER_TOKEN')
 
@@ -102,3 +65,214 @@ def verify_email(request):
 
     # Return a success response
     return JsonResponse({'message': 'Verification email sent successfully.'})
+
+@csrf_exempt
+@require_http_methods(["PUT"])
+def add_info(request):
+    try:
+        # Load data from the request
+        data = json.loads(request.body)
+        email = data.get('email')
+        first_name = data.get('firstName')
+        last_name = data.get('lastName')
+        organization = data.get('organization')
+        birthday = data.get('birthday') 
+        phone_number = data.get('phoneNumber')
+
+        # Find the user by email
+        user = User.objects.get(email=email)
+
+        # Retrieve or create the user's profile
+        profile, created = UserProfile.objects.get_or_create(user=user)
+
+        # Update the profile with new data
+        if first_name:
+            profile.first_name = first_name
+        if last_name:
+            profile.last_name = last_name
+        if organization is not None:  # Allow empty string for organization
+            profile.organization = organization
+        if birthday:
+            birthday_date = datetime.strptime(birthday, '%m/%d/%Y').date()
+            profile.birthday = birthday_date
+        if phone_number:
+            profile.phone_number = phone_number   
+
+        # Save the updated profile
+        profile.save()
+
+           # Send verification SMS
+        if phone_number:
+            send_verification_code(phone_number)  # Send SMS using Twilio
+
+        return JsonResponse({'message': 'User profile updated successfully and SMS sent.'})
+
+    except ObjectDoesNotExist:
+        return JsonResponse({'error': 'User not found'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+    
+@csrf_exempt
+@require_http_methods(["POST"])
+def confirm_email(request):
+    try:
+        data = json.loads(request.body)
+        confirmation_token = data.get('confirmationToken')
+        email = data.get('email')
+
+        # Retrieve the confirmation instance
+        try:
+            confirmation = Confirmation.objects.get(confirmation_token=confirmation_token)
+        except Confirmation.DoesNotExist:
+            return JsonResponse({'message': 'Confirmation token not found'}, status=404)
+
+        # Check if email matches
+        if confirmation.email != email:
+            return JsonResponse({'message': 'Invalid confirmation token or email'}, status=401)
+
+        # Find or create the user
+        user, created = User.objects.get_or_create(email=email)
+
+        # Update or create the user profile
+        profile, created = UserProfile.objects.get_or_create(user=user)
+        profile.email_verified = True
+        profile.save()
+
+        # Delete the confirmation instance
+        confirmation.delete()
+
+        return JsonResponse({'message': 'User confirmed and email verified'})
+
+    except User.DoesNotExist:
+        return JsonResponse({'error': 'User not found'}, status=404)
+    except Exception as e:
+
+        traceback.print_exc()  # This will print the full traceback to your console or logs
+        return JsonResponse({'error': str(e)}, status=500)
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def resend_email(request):
+    data = json.loads(request.body)
+    email = data.get('email')
+
+    # Retrieve the user and their associated UserProfile
+    try:
+        user = User.objects.get(email=email)
+        user_profile = UserProfile.objects.get(user=user)
+    except (User.DoesNotExist, UserProfile.DoesNotExist):
+        return JsonResponse({'error': 'User not found.'}, status=404)
+
+    # Check if the user's email is already verified
+    if user_profile.email_verified:
+        return JsonResponse({'message': 'Email is already verified.'})
+
+    # Retrieve the existing confirmation token
+    try:
+        confirmation = Confirmation.objects.get(email=email)
+        confirmationToken = confirmation.confirmation_token
+    except Confirmation.DoesNotExist:
+        return JsonResponse({'error': 'Confirmation token not found.'}, status=404)
+
+    # Prepare and resend the verification email
+    subject = "Verify Your Email"
+    frontend_url = config('FRONTEND_URL')
+    message = f"To continue setting up your Humuli account, please click the following link to confirm your email: {frontend_url}/onboarding/info?token={confirmationToken}&email={email}"
+    
+    sender = config('EMAIL_SENDER')
+    token = config('ONBOARDING_EMAIL_SERVER_TOKEN')
+
+    send_email_via_postmark(subject, message, sender, [email], token)
+
+    # Return a success response
+    return JsonResponse({'message': 'Verification email resent successfully.'})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def resend_code(request):
+    try:
+        data = json.loads(request.body)
+        email = data.get('email')
+
+        # Retrieve the user's profile
+      
+        try:
+            user = User.objects.get(email=email)
+            user_profile = UserProfile.objects.get(user=user)
+        except UserProfile.DoesNotExist:
+            return JsonResponse({'error': 'User profile not found'}, status=404)
+
+        # Resend the OTP code
+        phone_number = user_profile.phone_number
+        if phone_number:
+            send_verification_code(phone_number)  # Replace with your OTP sending logic
+            return JsonResponse({'message': 'OTP code resent successfully'})
+        else:
+            return JsonResponse({'error': 'Phone number not found'}, status=404)
+
+    except Exception as e:
+        traceback.print_exc()
+        return JsonResponse({'error': str(e)}, status=500)
+    
+@csrf_exempt
+@require_http_methods(["POST"])
+def confirm_phone_number(request):
+    try:
+        data = json.loads(request.body)
+        phone_number = data.get('phoneNumber')
+        email = data.get('email')
+        otp_code = data.get('code')
+
+        verification_check = verify_number(phone_number, otp_code)
+
+        try:
+            user = User.objects.get(email=email)
+            user_profile = UserProfile.objects.get(user=user)
+        except UserProfile.DoesNotExist:
+            return JsonResponse({'error': 'User profile not found'}, status=404)
+        
+        if verification_check.status == "approved":
+            user_profile.phone_verified = True
+            user_profile.save()
+            return JsonResponse({'message': 'Phone number verified.'})
+        else:
+            return JsonResponse({'message': 'Invalid verification code.'}, status=400)
+
+    except Exception as e:
+        traceback.print_exc()
+        return JsonResponse({'error': str(e)}, status=500)
+    
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def login(request):
+    try:
+        # Parse the request body to get the credentials
+        data = json.loads(request.body)
+        email = data.get('email')
+        password = data.get('password')
+
+        # Authenticate the user
+        user = authenticate(username=email, password=password)
+
+        if user is not None:
+            # User is authenticated, proceed to generate and return the token
+            token, created = Token.objects.get_or_create(user=user)
+            return JsonResponse({
+                'message': 'Login successful',
+                'token': token.key,
+                'user': {
+                    'email': user.email,
+                    'first_name': user.first_name,
+                    'last_name': user.last_name
+                    # Add other user fields you need
+                }
+            })
+        else:
+            # Authentication failed
+            return JsonResponse({'error': 'Invalid credentials'}, status=401)
+
+    except Exception as e:
+        # Handle unexpected errors
+        return JsonResponse({'error': str(e)}, status=500)

@@ -11,7 +11,6 @@ class UserProfile(models.Model):
     gender = models.CharField(max_length=10, blank=True)
     phone_number = models.CharField(max_length=20, blank=True)
     birthday = models.DateField(null=True, blank=True)
-    username = models.CharField(max_length=30, unique=True)
     photo = models.ImageField(upload_to='profile_photos/', null=True, blank=True)
     registration_tokens = models.JSONField(default=list)
     subscription = models.CharField(max_length=100, blank=True)
